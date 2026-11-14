@@ -55,7 +55,7 @@ void main(void* dt, void* kernel, void* ramdisk, const void* bootloader_fdt)
 #endif
 
 #ifdef CONFIG_HUAWEI_EVEREST
-	printk(KERN_NOTICE, "[EVR-L29:05] OK  Handing off to kernel\n");
+	printk(KERN_NOTICE, "[%s:05] OK  Handing off to kernel\n", everest_product_name());
 #endif
 	boot_kernel(dt, kernel, ramdisk);
 

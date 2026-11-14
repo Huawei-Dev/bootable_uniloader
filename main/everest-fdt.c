@@ -14,10 +14,22 @@
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #define EVR_MAX_SOURCE_FDT_BYTES 2097152U
+#define EVR_MAX_CATALOG_FDT_BYTES (16U * 1024U * 1024U)
 #define EVR_BOOTARGS_MAX 4096
 
 static uint8_t evr_runtime_fdt[CONFIG_FDT_BUF_SIZE] __attribute__((aligned(8)));
 static char evr_bootargs_buf[EVR_BOOTARGS_MAX];
+
+/* A short, persistent label from the original Huawei firmware FDT.
+ * A neutral label is used only if firmware identity cannot be displayed.
+ * Never retain pointers into a mutable FDT property. */
+#define EVR_PRODUCT_NAME_MAX 64
+static char evr_product_name[EVR_PRODUCT_NAME_MAX] = "EVR-UNKNOWN";
+
+const char *everest_product_name(void)
+{
+    return evr_product_name;
+}
 
 /*
  * Huawei pre-kernel firmware may enforce strict alignment (SCTLR_EL1.A).
@@ -39,6 +51,28 @@ static bool evr_fdt_single_string(const char *value, int len)
 {
 	return value && len > 1 && value[len - 1] == '\0' &&
 		strnlen(value, len) == (size_t)(len - 1);
+}
+
+/* The label is printed on the framebuffer: reject control characters and
+ * overly long strings, but do not change FDT validation or boot behavior. */
+static bool evr_fdt_safe_product_label(const char *value, int len)
+{
+    int i;
+
+    if (!evr_fdt_single_string(value, len) ||
+        len > (int)sizeof(evr_product_name))
+        return false;
+
+    for (i = 0; i < len - 1; i++) {
+        unsigned char ch = ((const volatile unsigned char *)value)[i];
+
+        if (!((ch >= 'A' && ch <= 'Z') ||
+              (ch >= 'a' && ch <= 'z') ||
+              (ch >= '0' && ch <= '9') ||
+              ch == '-' || ch == '_'))
+            return false;
+    }
+    return true;
 }
 
 static int evr_fdt_copy_prop(void *dst, const void *src,
@@ -122,6 +156,11 @@ static int evr_fdt_validate_and_copy_identity(void *dst,
 			return -FDT_ERR_BADVALUE;
 		}
 
+		/* Product name comes from the original firmware, not the
+		 * selected EMUI10 catalog member.  Save before FDT mutation. */
+		if (i == 2 && evr_fdt_safe_product_label(sv, slen))
+			evr_fdt_copy_bytes(evr_product_name, sv, (size_t)slen);
+
 		if (slen != dlen || memcmp(sv, dv, slen)) {
 			if (i == 4)
 				return -FDT_ERR_BADVALUE;
@@ -150,7 +189,7 @@ static int evr_fdt_validate_and_copy_identity(void *dst,
 			return ret;
 	}
 
-	printk(KERN_NOTICE, "[EVR-L29:01] OK  Board ID validated\n");
+	printk(KERN_NOTICE, "[%s:01] OK  Board ID validated\n", everest_product_name());
 	return 0;
 }
 
@@ -373,7 +412,7 @@ static int evr_fdt_select_panel(void *dst, const void *src)
 	    strcmp(type, emui10_compatible))
 		return -FDT_ERR_BADVALUE;
 
-	printk(KERN_NOTICE, "[EVR-L29:02] OK  LCD panel matched\n");
+	printk(KERN_NOTICE, "[%s:02] OK  LCD panel matched\n", everest_product_name());
 	return 0;
 }
 
@@ -518,7 +557,7 @@ static int huawei_everest_adapt_fdt(void *dst, const void *src)
 	if (ret)
 		return ret;
 
-	printk(KERN_NOTICE, "[EVR-L29:03] OK  RAM / HOTA validated\n");
+	printk(KERN_NOTICE, "[%s:03] OK  RAM / HOTA validated\n", everest_product_name());
 	return 0;
 }
 
@@ -612,8 +651,109 @@ static int evr_fix_charger_bootmode(void *fdt)
 
     ret = fdt_setprop(fdt, chosen, "bootargs", evr_bootargs_buf, new_len);
     if (!ret)
-        printk(KERN_NOTICE, "[EVR-L29:06] OK  Charger boot mode\n");
+        printk(KERN_NOTICE, "[%s:06] OK  Charger boot mode\n", everest_product_name());
     return ret;
+}
+
+/*
+ * The linker embeds everest_catalog.dtb as one read-only FDT, sized to its
+ * actual contents (no 16 MiB runtime reservation).  Its dtb-data payloads
+ * are only FDT-property aligned: NEVER pass an embedded pointer to libfdt.
+ * Instead, copy the selected member bytewise to our existing 4 MiB, 8-byte
+ * aligned runtime workspace, then open it in place.
+ *
+ * Return 0 for a traditional single-board DTB, 1 for a selected catalog
+ * member, and a negative libfdt error on failure.
+ */
+static int evr_catalog_select(const void *input, const void *bootloader_fdt,
+                              void *workspace)
+{
+    const char *compatible;
+    const void *payload = NULL;
+    const fdt32_t *boardid, *candidate_id;
+    int root, list, child, len, payload_len = 0, ret, matches = 0;
+    int i;
+
+    list = fdt_path_offset(input, "/everest,dtb-catalog");
+    if (list == -FDT_ERR_NOTFOUND)
+        return 0;  /* Existing single-DTB path. */
+    if (list < 0)
+        return list;
+
+    if (fdt_totalsize(input) > EVR_MAX_CATALOG_FDT_BYTES)
+        return -FDT_ERR_NOSPACE;
+
+    root = fdt_path_offset(input, "/");
+    if (root < 0)
+        return root;
+    compatible = fdt_getprop(input, root, "compatible", &len);
+    if (!evr_fdt_single_string(compatible, len) ||
+        strcmp(compatible, "huawei,everest-dtb-catalog-v1"))
+        return -FDT_ERR_BADVALUE;
+
+    root = fdt_path_offset(bootloader_fdt, "/rootparam");
+    if (root < 0)
+        return root;
+    boardid = fdt_getprop(bootloader_fdt, root, "hisi,boardid", &len);
+    if (!boardid || len != 4 * (int)sizeof(fdt32_t))
+        return -FDT_ERR_BADVALUE;
+
+    for (child = fdt_first_subnode(input, list);
+         child >= 0; child = fdt_next_subnode(input, child)) {
+        bool equal = true;
+
+        candidate_id = fdt_getprop(input, child, "hisi,boardid", &len);
+        if (!candidate_id || len != 4 * (int)sizeof(fdt32_t))
+            return -FDT_ERR_BADVALUE;
+        /* Safe under Huawei SCTLR_EL1.A: no unaligned wide load. */
+        for (i = 0; i < 4 * (int)sizeof(fdt32_t); i++) {
+            if (((const volatile unsigned char *)candidate_id)[i] !=
+                ((const volatile unsigned char *)boardid)[i]) {
+                equal = false;
+                break;
+            }
+        }
+        if (!equal)
+            continue;
+        if (++matches != 1)
+            return -FDT_ERR_BADVALUE;
+        payload = fdt_getprop(input, child, "dtb-data", &payload_len);
+        if (!payload || payload_len < (int)sizeof(struct fdt_header) ||
+            payload_len > (int)EVR_MAX_SOURCE_FDT_BYTES ||
+            payload_len > (int)CONFIG_FDT_BUF_SIZE)
+            return -FDT_ERR_BADVALUE;
+    }
+    if (child != -FDT_ERR_NOTFOUND)
+        return child;
+    if (matches != 1)
+        return -FDT_ERR_NOTFOUND;
+
+    /* The embedded DTB can be 4-byte aligned, not necessarily 8-byte aligned. */
+    evr_fdt_copy_bytes(workspace, payload, (size_t)payload_len);
+    ret = fdt_check_header(workspace);
+    if (ret)
+        return ret;
+    if (fdt_totalsize(workspace) != (uint32_t)payload_len)
+        return -FDT_ERR_BADVALUE;
+
+    /* Verify the selected payload's identity before any FDT adaptation. */
+    root = fdt_path_offset(workspace, "/rootparam");
+    if (root < 0)
+        return root;
+    candidate_id = fdt_getprop(workspace, root, "hisi,boardid", &len);
+    if (!candidate_id || len != 4 * (int)sizeof(fdt32_t))
+        return -FDT_ERR_BADVALUE;
+    for (i = 0; i < 4 * (int)sizeof(fdt32_t); i++) {
+        if (((const volatile unsigned char *)candidate_id)[i] !=
+            ((const volatile unsigned char *)boardid)[i])
+            return -FDT_ERR_BADVALUE;
+    }
+
+    printk(KERN_INFO, "Everest FDT: selected catalog board %u.%u.%u.%u (%u bytes)\n",
+           fdt32_to_cpu(boardid[0]), fdt32_to_cpu(boardid[1]),
+           fdt32_to_cpu(boardid[2]), fdt32_to_cpu(boardid[3]),
+           (unsigned int)payload_len);
+    return 1;
 }
 
 int everest_patch_dtb(void **dt, const void *bootloader_fdt)
@@ -640,12 +780,25 @@ int everest_patch_dtb(void **dt, const void *bootloader_fdt)
     ret = fdt_check_header(*dt);
     if (ret)
         return ret;
-    dest_size = fdt_totalsize(*dt);
-    if (dest_size < sizeof(struct fdt_header) ||
-        dest_size > sizeof(evr_runtime_fdt))
-        return -FDT_ERR_NOSPACE;
 
-    ret = fdt_open_into(*dt, out, sizeof(evr_runtime_fdt));
+    /* Select by the original Huawei board ID, or keep the old single DTB. */
+    ret = evr_catalog_select(*dt, bootloader_fdt, out);
+    if (ret < 0)
+        goto error;
+    if (ret == 1) {
+        dest_size = fdt_totalsize(out);
+        if (dest_size < sizeof(struct fdt_header) ||
+            dest_size > sizeof(evr_runtime_fdt))
+            return -FDT_ERR_NOSPACE;
+        /* In-place open is supported by the bundled libfdt. */
+        ret = fdt_open_into(out, out, sizeof(evr_runtime_fdt));
+    } else {
+        dest_size = fdt_totalsize(*dt);
+        if (dest_size < sizeof(struct fdt_header) ||
+            dest_size > sizeof(evr_runtime_fdt))
+            return -FDT_ERR_NOSPACE;
+        ret = fdt_open_into(*dt, out, sizeof(evr_runtime_fdt));
+    }
     if (ret)
         goto error;
     ret = evr_copy_chosen_props(out, bootloader_fdt);
@@ -684,11 +837,11 @@ int everest_patch_dtb(void **dt, const void *bootloader_fdt)
     }
 
     *dt = out;
-    printk(KERN_NOTICE, "[EVR-L29:04] OK  FDT adaptation completed\n");
+    printk(KERN_NOTICE, "[%s:04] OK  FDT adaptation completed\n", everest_product_name());
     return 0;
 
 error:
-    printk(KERN_ERR, "[EVR-L29:04] FAIL  FDT adaptation failed\n");
+    printk(KERN_ERR, "[%s:04] FAIL  FDT adaptation failed\n", everest_product_name());
     printk(KERN_ERR, "Everest FDT: firmware adaptation failed: %s (%d)\n",
            fdt_strerror(ret), ret);
     return ret;
