@@ -32,8 +32,8 @@
 	 */
 	b	\entry
 	.long	0				/* reserved */
-#ifdef CONFIG_HUAWEI_EVEREST
-	.quad	0x00080000		/* text_offset: Everest */
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
+	.quad	0x00080000		/* text_offset: Kirin980 */
 #else
 	.quad	0			/* text_offset */
 #endif

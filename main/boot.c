@@ -11,7 +11,7 @@
 
 void boot_kernel(void* dt, void* kernel, void* ramdisk)
 {
-#if defined(CONFIG_LIBFDT) && !defined(CONFIG_HUAWEI_EVEREST)
+#if defined(CONFIG_LIBFDT) && !defined(CONFIG_HUAWEI_EVEREST) && !defined(CONFIG_HUAWEI_SCHUMANN)
 	patch_dtb(&dt);
 #endif
 

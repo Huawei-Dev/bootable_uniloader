@@ -10,7 +10,7 @@
 #include <main/main.h>
 #include <lib/debug.h>
 #include <stdint.h>
-#ifdef CONFIG_HUAWEI_EVEREST
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
 #include <main/everest-fdt.h>
 #ifndef CONFIG_LIBFDT
 #error "Everest FDT adaptation requires CONFIG_LIBFDT=y"
@@ -44,7 +44,7 @@ void main(void* dt, void* kernel, void* ramdisk, const void* bootloader_fdt)
 	INITCALL(board_ops.ops.late_init);
 
 
-#ifdef CONFIG_HUAWEI_EVEREST
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
 	/* Normal production path: adapted candidate is used for boot. */
 	if (everest_patch_dtb(&dt, bootloader_fdt)) {
 		printk(KERN_EMERG, "Everest: FDT adaptation failed; refusing to boot\n");
@@ -54,7 +54,7 @@ void main(void* dt, void* kernel, void* ramdisk, const void* bootloader_fdt)
 	(void)bootloader_fdt;
 #endif
 
-#ifdef CONFIG_HUAWEI_EVEREST
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
 	printk(KERN_NOTICE, "[%s:05] OK  Handing off to kernel\n", everest_product_name());
 #endif
 	boot_kernel(dt, kernel, ramdisk);

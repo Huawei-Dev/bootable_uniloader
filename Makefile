@@ -406,7 +406,7 @@ uniloader-libs := $(patsubst %,%/lib.a, $(uniloader-lib-dirs))
 uniloader-all := $(uniloader-objs) $(uniloader-libs)
 
 # Linker script dependencies
-ifeq ($(CONFIG_HUAWEI_EVEREST),y)
+ifneq ($(filter y,$(CONFIG_HUAWEI_EVEREST) $(CONFIG_HUAWEI_SCHUMANN)),)
 linker-script-deps := $(KERNEL_PATH) $(DT_PATH)
 else
 linker-script-deps := $(KERNEL_PATH) $(RAMDISK_PATH)
@@ -429,7 +429,7 @@ quiet_cmd_cpp_lds = LDS     $@
                             -P -o $@
 
 ifdef CONFIG_RAMDISK_NO_COPY
-ifeq ($(CONFIG_HUAWEI_EVEREST),y)
+ifneq ($(filter y,$(CONFIG_HUAWEI_EVEREST) $(CONFIG_HUAWEI_SCHUMANN)),)
 	  cmd_cpp_lds += -DRAMDISK_SIZE=0
 else
 	  cmd_cpp_lds += -DRAMDISK_SIZE=$(shell stat -c%s $(RAMDISK_PATH))
@@ -453,7 +453,7 @@ quiet_cmd_uniloader_objcopy = OBJCOPY $@
       cmd_uniloader_objcopy = $(OBJCOPY) -O binary $@.o $@
 
 quiet_cmd_gzip_uniloader = GZIP    $@.gz
-ifeq ($(CONFIG_HUAWEI_EVEREST),y)
+ifneq ($(filter y,$(CONFIG_HUAWEI_EVEREST) $(CONFIG_HUAWEI_SCHUMANN)),)
       cmd_gzip_uniloader = gzip -n -9 -c uniLoader > uniLoader.gz
 else
       cmd_gzip_uniloader = gzip -c uniLoader > uniLoader.gz

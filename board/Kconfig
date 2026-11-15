@@ -71,6 +71,13 @@ menu "Device Support"
 		help
 		  Say Y if you want to include support for Huawei Mate 20 X (Everest)
 
+	config HUAWEI_SCHUMANN
+		bool "Support for Huawei MediaPad M6 10.8 (Schumann)"
+		default n
+		depends on KIRIN980
+		help
+		  Say Y if you want to include support for Huawei MediaPad M6 10.8 (Schumann)
+
 	config HTC_v36BML
 		bool "Support for HTC Desire 628 Dual"
 		default n

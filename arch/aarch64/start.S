@@ -23,7 +23,7 @@ _stack_size:
 .align 4
 #endif
 ENTRY(_start)
-#ifdef CONFIG_HUAWEI_EVEREST
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
 	/* Huawei firmware FDT address is passed in x0. */
 	mov     x19, x0
 #endif
@@ -62,7 +62,7 @@ ENTRY(_start)
 	add     x2, x2, #:lo12:ramdisk /* Add offset within the page */
 #endif
 
-#ifdef CONFIG_HUAWEI_EVEREST
+#if defined(CONFIG_HUAWEI_EVEREST) || defined(CONFIG_HUAWEI_SCHUMANN)
 	/* Fourth C argument: original firmware FDT pointer. */
 	mov     x3, x19
 #else
