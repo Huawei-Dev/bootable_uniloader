@@ -551,36 +551,134 @@ static int huawei_everest_adapt_fdt(void *dst, const void *src)
 	return 0;
 }
 
-/* Old setup.c: copy only the four dynamic /chosen properties. */
-static int evr_copy_chosen_props(void *dst, const void *src)
+/*
+ * The embedded EMUI10 DTB owns every hardware node.  Only /chosen is
+ * replaced in full from the original Huawei firmware FDT, including any
+ * properties or child nodes unknown to an older kernel-side setup.c.
+ * No hardware node outside /chosen is created or imported.
+ *
+ * The original /chosen node must exist in both trees.  Do not keep stale
+ * destination properties just because the firmware did not supply them.
+ */
+#define EVR_CHOSEN_PATH_MAX 1024
+static char evr_chosen_path[EVR_CHOSEN_PATH_MAX];
+
+static int evr_copy_chosen_node_props(void *dst, const void *src,
+                                      int src_node, const char *dst_path,
+                                      unsigned int *copied)
 {
-    static const char *const properties[] = {
-        "bootargs", "linux,initrd-start", "linux,initrd-end", "kaslr-seed"
-    };
-    int src_chosen, dst_chosen, len, ret;
+    int prop, next, len, dst_node, ret;
+    const char *name;
     const void *value;
-    size_t i;
+
+    for (prop = fdt_first_property_offset(src, src_node);
+         prop >= 0; prop = next) {
+        /* Never keep offsets into the destination across a mutation. */
+        value = fdt_getprop_by_offset(src, prop, &name, &len);
+        if (!value || !name || len < 0)
+            return -FDT_ERR_BADSTRUCTURE;
+
+        next = fdt_next_property_offset(src, prop);
+        if (next < 0 && next != -FDT_ERR_NOTFOUND)
+            return next;
+
+        dst_node = fdt_path_offset(dst, dst_path);
+        if (dst_node < 0)
+            return dst_node;
+        ret = fdt_setprop(dst, dst_node, name, value, len);
+        if (ret)
+            return ret;
+        ++*copied;
+    }
+    return prop == -FDT_ERR_NOTFOUND ? 0 : prop;
+}
+
+static int evr_replace_chosen(void *dst, const void *src)
+{
+    int src_chosen, dst_chosen, prop, child, ret, depth, node, next;
+    int parent;
+    const char *name;
+    const void *value;
+    unsigned int props = 0, children = 0;
+    size_t name_len;
+    char *slash;
 
     src_chosen = fdt_path_offset(src, "/chosen");
     dst_chosen = fdt_path_offset(dst, "/chosen");
     if (src_chosen < 0 || dst_chosen < 0)
         return -FDT_ERR_NOTFOUND;
 
-    for (i = 0; i < ARRAY_SIZE(properties); i++) {
-        value = fdt_getprop(src, src_chosen, properties[i], &len);
-        if (!value) {
-            if (len != -FDT_ERR_NOTFOUND)
-                return len;
-            continue;
-        }
-        /* A prior fdt_setprop() may invalidate destination node offsets. */
-        dst_chosen = fdt_path_offset(dst, "/chosen");
-        if (dst_chosen < 0)
-            return dst_chosen;
-        ret = fdt_setprop(dst, dst_chosen, properties[i], value, len);
+    /* Clear destination /chosen, but preserve its node itself. */
+    for (;;) {
+        prop = fdt_first_property_offset(dst, dst_chosen);
+        if (prop == -FDT_ERR_NOTFOUND)
+            break;
+        if (prop < 0)
+            return prop;
+        value = fdt_getprop_by_offset(dst, prop, &name, NULL);
+        if (!value || !name)
+            return -FDT_ERR_BADSTRUCTURE;
+        name_len = strlen(name);
+        if (name_len >= sizeof(evr_chosen_path))
+            return -FDT_ERR_NOSPACE;
+        evr_fdt_copy_bytes(evr_chosen_path, name, name_len + 1);
+        ret = fdt_delprop(dst, dst_chosen, evr_chosen_path);
         if (ret)
             return ret;
     }
+
+    for (;;) {
+        child = fdt_first_subnode(dst, dst_chosen);
+        if (child == -FDT_ERR_NOTFOUND)
+            break;
+        if (child < 0)
+            return child;
+        ret = fdt_del_node(dst, child);
+        if (ret)
+            return ret;
+    }
+
+    ret = evr_copy_chosen_node_props(dst, src, src_chosen,
+                                      "/chosen", &props);
+    if (ret)
+        return ret;
+
+    /* Copy any firmware /chosen descendants, without touching hardware. */
+    node = src_chosen;
+    depth = 0;
+    for (;;) {
+        next = fdt_next_node(src, node, &depth);
+        if (next == -FDT_ERR_NOTFOUND || depth <= 0)
+            break;
+        if (next < 0)
+            return next;
+        node = next;
+        ret = fdt_get_path(src, node, evr_chosen_path,
+                           sizeof(evr_chosen_path));
+        if (ret)
+            return ret;
+        slash = strrchr(evr_chosen_path, '/');
+        if (!slash || slash == evr_chosen_path)
+            return -FDT_ERR_BADPATH;
+        *slash = '\0';
+        parent = fdt_path_offset(dst, evr_chosen_path);
+        *slash = '/';
+        if (parent < 0)
+            return parent;
+        child = fdt_add_subnode(dst, parent, slash + 1);
+        if (child < 0)
+            return child;
+        ++children;
+
+        ret = evr_copy_chosen_node_props(dst, src, node,
+                                          evr_chosen_path, &props);
+        if (ret)
+            return ret;
+    }
+
+    printk(KERN_NOTICE,
+           "[%s:chosen] OK  /chosen replaced from firmware (%u props, %u subnodes)\n",
+           everest_product_name(), props, children);
     return 0;
 }
 
@@ -791,10 +889,12 @@ int everest_patch_dtb(void **dt, const void *bootloader_fdt)
     }
     if (ret)
         goto error;
-    ret = evr_copy_chosen_props(out, bootloader_fdt);
+    /* Validate hardware identity and apply the tested EMUI10 fixups first. */
+    ret = huawei_everest_adapt_fdt(out, bootloader_fdt);
     if (ret)
         goto error;
-    ret = huawei_everest_adapt_fdt(out, bootloader_fdt);
+    /* Replace the entire /chosen subtree, not just four properties. */
+    ret = evr_replace_chosen(out, bootloader_fdt);
     if (ret)
         goto error;
     ret = evr_fix_charger_bootmode(out);
