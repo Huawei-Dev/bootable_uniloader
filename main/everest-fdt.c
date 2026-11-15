@@ -703,6 +703,105 @@ static const char *evr_find_bootarg(const char *cmdline, const char *token)
     return NULL;
 }
 
+/* Apply BoardSoftware bootargs cleanup only to Schumann.
+ * Identify the board using the original firmware FDT, not OEMINFO or cmdline. */
+static bool evr_is_schumann(const void *bootloader_fdt)
+{
+    const char *product;
+    int node, len;
+
+    node = fdt_path_offset(bootloader_fdt, "/rootparam");
+    if (node < 0)
+        return false;
+
+    product = fdt_getprop(bootloader_fdt, node, "hisi,product_name", &len);
+    return evr_fdt_single_string(product, len) && len >= 6 &&
+           product[0] == 'S' && product[1] == 'C' &&
+           product[2] == 'M' && product[3] == '-';
+}
+
+/* Match a whole bootargs token with byte loads (SCTLR_EL1.A may be set). */
+static bool evr_bootarg_equal(const char *token, size_t len,
+                              const char *wanted)
+{
+    size_t i;
+
+    for (i = 0; wanted[i]; i++) {
+        if (i >= len ||
+            ((const volatile unsigned char *)token)[i] !=
+            (unsigned char)wanted[i])
+            return false;
+    }
+    return i == len;
+}
+
+/* Remove Schumann factory overrides from /chosen/bootargs before Linux
+ * appends CONFIG_CMDLINE (which supplies the normal values).
+ * Never change Everest bootargs or any unrelated firmware arguments. */
+static int evr_filter_schumann_bootargs(void *fdt,
+                                       const void *bootloader_fdt)
+{
+    const char *args, *p, *token;
+    char *out = evr_bootargs_buf;
+    bool changed = false;
+    size_t token_len;
+    int chosen, len, ret;
+
+    if (!evr_is_schumann(bootloader_fdt))
+        return 0;
+
+    chosen = fdt_path_offset(fdt, "/chosen");
+    if (chosen < 0)
+        return chosen;
+    args = fdt_getprop(fdt, chosen, "bootargs", &len);
+    if (!args)
+        return len == -FDT_ERR_NOTFOUND ? 0 : len;
+    if (len == 1 && args[0] == '\0')
+        return 0;
+    if (!evr_fdt_single_string(args, len))
+        return -FDT_ERR_BADVALUE;
+    if (len > (int)sizeof(evr_bootargs_buf))
+        return -FDT_ERR_NOSPACE;
+
+    p = args;
+    while (*p) {
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+        token = p;
+        while (*p && *p != ' ')
+            p++;
+        token_len = (size_t)(p - token);
+
+        if (evr_bootarg_equal(token, token_len,
+                              "androidboot.swtype=factory") ||
+            evr_bootarg_equal(token, token_len, "setup_logctl=1") ||
+            evr_bootarg_equal(token, token_len,
+                              "product_phase=pre_delivery")) {
+            changed = true;
+            continue;
+        }
+
+        if (out != evr_bootargs_buf)
+            *out++ = ' ';
+        if (token_len + 1 >
+            sizeof(evr_bootargs_buf) - (size_t)(out - evr_bootargs_buf))
+            return -FDT_ERR_NOSPACE;
+        evr_fdt_copy_bytes(out, token, token_len);
+        out += token_len;
+    }
+    *out = '\0';
+
+    if (!changed)
+        return 0;
+    ret = fdt_setprop(fdt, chosen, "bootargs", evr_bootargs_buf,
+                      (int)(out - evr_bootargs_buf) + 1);
+    if (!ret)
+        printk(KERN_NOTICE, "[SCM:bootargs] OK  Factory tokens removed\n");
+    return ret;
+}
+
 /* Old setup.c: only change charger mode if BOTH tokens are present. */
 static int evr_fix_charger_bootmode(void *fdt)
 {
@@ -897,6 +996,10 @@ int everest_patch_dtb(void **dt, const void *bootloader_fdt)
         goto error;
     /* Replace the entire /chosen subtree, not just four properties. */
     ret = evr_replace_chosen(out, bootloader_fdt);
+    if (ret)
+        goto error;
+    /* BoardSoftware factory arguments must not override Schumann cmdline. */
+    ret = evr_filter_schumann_bootargs(out, bootloader_fdt);
     if (ret)
         goto error;
     ret = evr_fix_charger_bootmode(out);
