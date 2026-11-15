@@ -24,7 +24,7 @@ static char evr_bootargs_buf[EVR_BOOTARGS_MAX];
  * A neutral label is used only if firmware identity cannot be displayed.
  * Never retain pointers into a mutable FDT property. */
 #define EVR_PRODUCT_NAME_MAX 64
-static char evr_product_name[EVR_PRODUCT_NAME_MAX] = "EVR-UNKNOWN";
+static char evr_product_name[EVR_PRODUCT_NAME_MAX] = "k980-UNKNOWN";
 
 const char *everest_product_name(void)
 {
@@ -764,6 +764,8 @@ static int evr_catalog_select(const void *input, const void *bootloader_fdt,
 
     list = fdt_path_offset(input, "/everest,dtb-catalog");
     if (list == -FDT_ERR_NOTFOUND)
+        list = fdt_path_offset(input, "/schumann,dtb-catalog");
+    if (list == -FDT_ERR_NOTFOUND)
         return 0;  /* Existing single-DTB path. */
     if (list < 0)
         return list;
@@ -776,7 +778,7 @@ static int evr_catalog_select(const void *input, const void *bootloader_fdt,
         return root;
     compatible = fdt_getprop(input, root, "compatible", &len);
     if (!evr_fdt_single_string(compatible, len) ||
-        strcmp(compatible, "huawei,everest-dtb-catalog-v1"))
+        (strcmp(compatible, "huawei,everest-dtb-catalog-v1") && strcmp(compatible, "huawei,schumann-dtb-catalog-v1")))
         return -FDT_ERR_BADVALUE;
 
     root = fdt_path_offset(bootloader_fdt, "/rootparam");
