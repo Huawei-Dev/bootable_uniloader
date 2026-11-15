@@ -99,7 +99,7 @@ static int evr_fdt_copy_prop(void *dst, const void *src,
  * The 4-cell board ID is the authoritative selection key.  Product names,
  * regional labels and modem IDs can legitimately change between firmware
  * generations, so their mismatch is reported, not used to switch boards.
- * Both FDTs must nevertheless describe an Everest, never PANDA or ELE.
+ * Do not restrict device identity to a hard-coded model name or ID prefix.
  */
 static int evr_fdt_validate_and_copy_identity(void *dst,
 						const void *src)
@@ -126,8 +126,6 @@ static int evr_fdt_validate_and_copy_identity(void *dst,
 		printk(KERN_CRIT, "Everest FDT: boardid absent, malformed or different\n");
 		return -FDT_ERR_BADVALUE;
 	}
-	if (fdt32_to_cpu(sid[0]) != 8 || fdt32_to_cpu(sid[1]) != 4)
-		return -FDT_ERR_BADVALUE;
 
 	for (i = 0; i < ARRAY_SIZE(names); i++) {
 		sv = fdt_getprop(src, s, names[i], &slen);
@@ -138,14 +136,6 @@ static int evr_fdt_validate_and_copy_identity(void *dst,
 		if (i == 0 || i == 2) {
 			if (!evr_fdt_single_string(sv, slen) ||
 			    !evr_fdt_single_string(dv, dlen))
-				return -FDT_ERR_BADVALUE;
-			if (i == 0 &&
-			    (strncmp(sv, "EVER_", 5) ||
-			     strncmp(dv, "EVER_", 5)))
-				return -FDT_ERR_BADVALUE;
-			if (i == 2 &&
-			    (strncmp(sv, "EVR-", 4) ||
-			     strncmp(dv, "EVR-", 4)))
 				return -FDT_ERR_BADVALUE;
 		} else if (i == 1 || i == 3) {
 			if (slen != sizeof(fdt32_t) ||
