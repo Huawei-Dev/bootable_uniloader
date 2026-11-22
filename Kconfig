@@ -75,3 +75,8 @@ source "lib/Kconfig"
 source "soc/Kconfig"
 
 source "board/Kconfig"
+
+# Huawei Kirin 710 platform selector (uniLoader k710 branch)
+config KIRIN710
+    bool "HiSilicon Kirin 710"
+    default n

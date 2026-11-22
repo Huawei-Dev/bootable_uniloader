@@ -32,7 +32,11 @@
 	 */
 	b	\entry
 	.long	0				/* reserved */
+#ifdef CONFIG_KIRIN710
+	.quad	0x00080000		/* Kirin 710: verified on SNE */
+#else
 	.quad	0				/* text_offset */
+#endif
 	.quad	_kernel_size			/* image_size, see linker script */
 	.quad	LINUX_IMAGE_FLAGS		/* flags */
 	.quad	0				/* reserved */

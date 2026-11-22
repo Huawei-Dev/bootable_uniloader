@@ -67,3 +67,4 @@ lib-$(CONFIG_XIAOMI_MOON) += xiaomi/board-moon.o
 lib-$(CONFIG_XIAOMI_NEZHA) += xiaomi/board-nezha.o
 lib-$(CONFIG_XIAOMI_SHENNONG) += xiaomi/board-shennong.o
 lib-$(CONFIG_ZTE_PINE) += zte/board-pine.o
+lib-$(CONFIG_KIRIN710) += huawei/board-kirin710.o

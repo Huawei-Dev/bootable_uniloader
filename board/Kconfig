@@ -64,6 +64,28 @@ menu "Device Support"
 		help
 		  Say Y if you want to include support for Huawei Y3 II 4G
 
+	config HUAWEI_SNE
+		bool "Huawei Mate 20 Lite (SNE)"
+		depends on KIRIN710
+		default n
+		help
+		  Huawei Mate 20 Lite / SNE Kirin 710 board support.
+
+	config HUAWEI_POT
+		bool "Huawei P Smart 2019 (POT)"
+		depends on KIRIN710
+		default n
+		help
+		  Huawei POT Kirin 710 board support.
+
+	config HUAWEI_MAR
+		bool "Huawei P30 Lite (MAR)"
+		depends on KIRIN710
+		default n
+		help
+		  Huawei MAR Kirin 710 board support.
+
+
 	config HTC_v36BML
 		bool "Support for HTC Desire 628 Dual"
 		default n

@@ -9,6 +9,12 @@
 #include <main/boot.h>
 #include <main/main.h>
 #include <lib/debug.h>
+#ifdef CONFIG_KIRIN710
+#include <main/kirin710-fdt.h>
+#ifndef CONFIG_LIBFDT
+#error "Kirin 710 FDT requires CONFIG_LIBFDT=y"
+#endif
+#endif
 
 extern struct board_data board_ops;
 
@@ -25,7 +31,7 @@ static void print_splash(void)
 	printk(KERN_INFO, "welcome to uniLoader %s on %s\n", VER_TAG, board_ops.name);
 }
 
-void main(void* dt, void* kernel, void* ramdisk)
+void main(void* dt, void* kernel, void* ramdisk, const void* bootloader_fdt)
 {
 	early_console_init();
 	INITCALL(board_ops.ops.early_init);
@@ -36,6 +42,21 @@ void main(void* dt, void* kernel, void* ramdisk)
 
 	INITCALL(board_ops.ops.late_init);
 
+#ifdef CONFIG_KIRIN710
+    printk(KERN_EMERG, "[K710 01] uniLoader active; selecting FDT\n");
+    if (kirin710_patch_dtb(&dt, bootloader_fdt)) {
+        printk(KERN_EMERG, "[K710 ERROR] FDT/catalog selection or adaptation failed\n");
+        HANG();
+    }
+    printk(KERN_EMERG, "[K710 02] FDT selected and adapted: %s\n",
+           kirin710_product_name());
+#else
+    (void)bootloader_fdt;
+#endif
+
+#ifdef CONFIG_KIRIN710
+    printk(KERN_EMERG, "[K710 03] handing off to Linux\n");
+#endif
 	boot_kernel(dt, kernel, ramdisk);
 
 	// todo: reset the board?
